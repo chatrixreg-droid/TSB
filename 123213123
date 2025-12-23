@@ -1,0 +1,456 @@
+-- // ⚙️ НАСТРОЙКИ \\ --
+local API_URL = "http://95.81.99.228:3000/brainrot/latest"
+local PLACE_ID = 109983668079237 
+local CFG_FILE = "MoonLogs_v28_AntiError.json" 
+
+-- // 🕒 ЗАДЕРЖКА GUI \\ --
+local GUI_DELAY = 0.5 
+
+-- // 🛠 СЕРВИСЫ \\ --
+local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
+local Players = game:GetService("Players")
+local GuiService = game:GetService("GuiService")
+local UserInputService = game:GetService("UserInputService")
+local Player = Players.LocalPlayer
+
+-- // 💾 ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ \\ --
+local LockedJobs = {} 
+local IsSpamming = false 
+local LastCheckedID = "" 
+
+-- // 💾 СОХРАНЕНИЕ \\ --
+local Settings = {
+    MasterEnabled = false, 
+    AutoGreen = false,      -- < 30M
+    AutoOrange = false,     -- 30M - 100M
+    AutoRed = false,        -- 100M+
+    FilterText = ""          
+}
+
+local function SaveConfig()
+    if writefile then
+        local dataToSave = {
+            AutoGreen = Settings.AutoGreen,
+            AutoOrange = Settings.AutoOrange,
+            AutoRed = Settings.AutoRed,
+            FilterText = Settings.FilterText
+        }
+        pcall(function()
+            writefile(CFG_FILE, HttpService:JSONEncode(dataToSave))
+        end)
+    end
+end
+
+local function LoadConfig()
+    if isfile and readfile and isfile(CFG_FILE) then
+        pcall(function()
+            local data = HttpService:JSONDecode(readfile(CFG_FILE))
+            if data then
+                if data.AutoGreen ~= nil then Settings.AutoGreen = data.AutoGreen end
+                if data.AutoOrange ~= nil then Settings.AutoOrange = data.AutoOrange end
+                if data.AutoRed ~= nil then Settings.AutoRed = data.AutoRed end
+                if data.FilterText ~= nil then Settings.FilterText = data.FilterText end
+            end
+        end)
+    end
+end
+
+LoadConfig()
+
+-- // 🕵️ STEALTH REQUEST \\ --
+local function safeRequest(url)
+    local candidates = {
+        syn and syn.request,
+        http and http.request,
+        http_request,
+        fluxus and fluxus.request,
+        request
+    }
+    for _, func in pairs(candidates) do
+        if func and type(func) == "function" then
+            local s, r = pcall(function() return func({Url = url, Method = "GET"}) end)
+            if s and r and r.Body then return r.Body end
+        end
+    end
+    return game:HttpGet(url)
+end
+
+local function ParseValue(str)
+    if type(str) == "number" then return str end
+    if type(str) ~= "string" or str == "" then return 0 end
+    str = str:lower()
+    local num = tonumber(str:match("[%d%.]+")) or 0
+    if str:find("b") then num = num * 1000000000
+    elseif str:find("m") then num = num * 1000000
+    elseif str:find("k") then num = num * 1000 end
+    return num
+end
+
+-- // 🎨 ЦВЕТА (TIERS) - 30M / 100M 🎨 \\ --
+local function GetColorType(val)
+    if val >= 100000000 then -- 100M+ = RED (High)
+        return "Red", Color3.fromRGB(255, 60, 60)
+    elseif val >= 30000000 then -- 30M - 100M = ORANGE (Mid)
+        return "Orange", Color3.fromRGB(255, 170, 0)
+    else -- < 30M = GREEN (Low)
+        return "Green", Color3.fromRGB(0, 255, 120)
+    end
+end
+
+-- // GUI SETUP \\ --
+if game.CoreGui:FindFirstChild("MoonLogsMaster") then game.CoreGui.MoonLogsMaster:Destroy() end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "MoonLogsMaster"
+if pcall(function() local x = game.CoreGui end) then ScreenGui.Parent = game.CoreGui else ScreenGui.Parent = Player:WaitForChild("PlayerGui") end
+
+-- MAIN FRAME
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainPanel"
+MainFrame.Size = UDim2.new(0, 520, 0, 400)
+MainFrame.Position = UDim2.new(0.5, -260, 0.5, -200)
+MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+local MCorner = Instance.new("UICorner"); MCorner.CornerRadius = UDim.new(0, 8); MCorner.Parent = MainFrame
+
+-- HEADER
+local Header = Instance.new("Frame")
+Header.Size = UDim2.new(1, 0, 0, 35)
+Header.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+Header.Parent = MainFrame
+local HCorner = Instance.new("UICorner"); HCorner.CornerRadius = UDim.new(0, 8); HCorner.Parent = Header
+
+local Title = Instance.new("TextLabel")
+Title.Text = "MOON LOGS [ANTI-ERROR]"
+Title.Font = Enum.Font.GothamBlack
+Title.TextSize = 16
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.BackgroundTransparency = 1
+Title.Size = UDim2.new(1, 0, 1, 0)
+Title.Position = UDim2.new(0, 10, 0, 0)
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = Header
+
+-- CONTROLS
+local Controls = Instance.new("Frame")
+Controls.Size = UDim2.new(1, -20, 0, 85)
+Controls.Position = UDim2.new(0, 10, 0, 40)
+Controls.BackgroundTransparency = 1
+Controls.Parent = MainFrame
+
+-- BUTTONS
+local MasterBtn = Instance.new("TextButton")
+MasterBtn.Size = UDim2.new(0, 130, 0, 35)
+MasterBtn.Font = Enum.Font.GothamBold
+MasterBtn.TextSize = 13
+MasterBtn.Text = "AUTO: OFF"
+MasterBtn.Parent = Controls
+local MBCorner = Instance.new("UICorner"); MBCorner.CornerRadius = UDim.new(0, 6); MBCorner.Parent = MasterBtn
+
+local ClearBtn = Instance.new("TextButton")
+ClearBtn.Size = UDim2.new(0, 100, 0, 35)
+ClearBtn.Position = UDim2.new(0, 135, 0, 0)
+ClearBtn.Font = Enum.Font.GothamBold
+ClearBtn.TextSize = 13
+ClearBtn.Text = "CLEAR"
+ClearBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+ClearBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+ClearBtn.Parent = Controls
+local CBCorner = Instance.new("UICorner"); CBCorner.CornerRadius = UDim.new(0, 6); CBCorner.Parent = ClearBtn
+
+local FilterBox = Instance.new("TextBox")
+FilterBox.PlaceholderText = "Custom Min"
+FilterBox.Text = Settings.FilterText
+FilterBox.Size = UDim2.new(0, 100, 0, 35)
+FilterBox.Position = UDim2.new(1, -100, 0, 0)
+FilterBox.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+FilterBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+FilterBox.Font = Enum.Font.Gotham
+FilterBox.TextSize = 12
+FilterBox.Parent = Controls
+local FBCorner = Instance.new("UICorner"); FBCorner.CornerRadius = UDim.new(0, 6); FBCorner.Parent = FilterBox
+
+-- FILTERS (TABS)
+local BtnGreen = Instance.new("TextButton")
+BtnGreen.Size = UDim2.new(0.32, 0, 0, 30)
+BtnGreen.Position = UDim2.new(0, 0, 0, 45)
+BtnGreen.Font = Enum.Font.GothamBold; BtnGreen.TextSize = 12
+BtnGreen.Text = "Low (<30M)"
+BtnGreen.Parent = Controls; local C1 = Instance.new("UICorner"); C1.CornerRadius = UDim.new(0, 6); C1.Parent = BtnGreen
+
+local BtnOrange = Instance.new("TextButton")
+BtnOrange.Size = UDim2.new(0.32, 0, 0, 30)
+BtnOrange.Position = UDim2.new(0.34, 0, 0, 45)
+BtnOrange.Font = Enum.Font.GothamBold; BtnOrange.TextSize = 12
+BtnOrange.Text = "Mid (30M-100M)"
+BtnOrange.Parent = Controls; local C2 = Instance.new("UICorner"); C2.CornerRadius = UDim.new(0, 6); C2.Parent = BtnOrange
+
+local BtnRed = Instance.new("TextButton")
+BtnRed.Size = UDim2.new(0.32, 0, 0, 30)
+BtnRed.Position = UDim2.new(0.68, 0, 0, 45)
+BtnRed.Font = Enum.Font.GothamBold; BtnRed.TextSize = 12
+BtnRed.Text = "High (100M+)"
+BtnRed.Parent = Controls; local C3 = Instance.new("UICorner"); C3.CornerRadius = UDim.new(0, 6); C3.Parent = BtnRed
+
+-- LOGS SCROLL
+local LogsScroll = Instance.new("ScrollingFrame")
+LogsScroll.Size = UDim2.new(1, -20, 1, -135)
+LogsScroll.Position = UDim2.new(0, 10, 0, 125)
+LogsScroll.BackgroundTransparency = 1
+LogsScroll.ScrollBarThickness = 2
+LogsScroll.Parent = MainFrame
+local LogsLayout = Instance.new("UIListLayout"); LogsLayout.Padding = UDim.new(0, 6); LogsLayout.SortOrder = Enum.SortOrder.LayoutOrder; LogsLayout.Parent = LogsScroll
+
+-- // ЛОГИКА GUI \\ --
+local currentMinFilter = ParseValue(Settings.FilterText)
+
+local function UpdateVisuals()
+    if Settings.MasterEnabled then
+        MasterBtn.Text = "AUTO JOIN: ON ⚡"
+        MasterBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
+        MasterBtn.TextColor3 = Color3.fromRGB(20, 20, 20)
+    else
+        MasterBtn.Text = "AUTO JOIN: OFF 💤"
+        MasterBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        MasterBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+    end
+
+    ClearBtn.MouseButton1Click:Connect(function()
+        for _, v in pairs(LogsScroll:GetChildren()) do if v:IsA("Frame") then v:Destroy() end end
+    end)
+    
+    local function setBtn(btn, state, color)
+        if state then
+            btn.BackgroundColor3 = color
+            btn.TextColor3 = Color3.new(0,0,0)
+            if color == Color3.fromRGB(255, 60, 60) then btn.TextColor3 = Color3.new(1,1,1) end
+            btn.BackgroundTransparency = 0
+            btn.BorderSizePixel = 2
+            btn.BorderColor3 = Color3.new(1,1,1)
+        else
+            btn.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+            btn.TextColor3 = Color3.fromRGB(100, 100, 100)
+            btn.BackgroundTransparency = 0.5
+            btn.BorderSizePixel = 0
+        end
+    end
+    setBtn(BtnGreen, Settings.AutoGreen, Color3.fromRGB(0, 255, 120))
+    setBtn(BtnOrange, Settings.AutoOrange, Color3.fromRGB(255, 170, 0))
+    setBtn(BtnRed, Settings.AutoRed, Color3.fromRGB(255, 60, 60))
+end
+
+MasterBtn.MouseButton1Click:Connect(function() Settings.MasterEnabled = not Settings.MasterEnabled; UpdateVisuals() end)
+BtnGreen.MouseButton1Click:Connect(function() Settings.AutoGreen = not Settings.AutoGreen; UpdateVisuals(); SaveConfig() end)
+BtnOrange.MouseButton1Click:Connect(function() Settings.AutoOrange = not Settings.AutoOrange; UpdateVisuals(); SaveConfig() end)
+BtnRed.MouseButton1Click:Connect(function() Settings.AutoRed = not Settings.AutoRed; UpdateVisuals(); SaveConfig() end)
+
+FilterBox.FocusLost:Connect(function()
+    Settings.FilterText = FilterBox.Text
+    currentMinFilter = ParseValue(FilterBox.Text)
+    SaveConfig()
+end)
+UpdateVisuals()
+
+UserInputService.InputBegan:Connect(function(input)
+    if input.KeyCode == Enum.KeyCode.RightShift then MainFrame.Visible = not MainFrame.Visible end
+end)
+
+-- // 🔥 ФУНКЦИЯ ДЛЯ СПАМА ТЕЛЕПОРТОМ 🔥 \\ --
+local function SpamTeleport(jobId)
+    task.spawn(function()
+        for i = 1, 25 do -- 25 попыток спама
+            TeleportService:TeleportToPlaceInstance(PLACE_ID, jobId, Player)
+            task.wait(0.01)
+        end
+    end)
+end
+
+-- // 🔥 ERROR BUSTER (ТВОЙ КОД) 🔥 \\ --
+task.spawn(function()
+    while true do
+        game:GetService('GuiService'):ClearError()
+        task.wait(0.000000000000001) -- Waits for 1 seconds before repeating the loop
+    end
+end)
+
+-- // ЛОГИКА БЛОКИРОВКИ (Lock) \\ --
+task.spawn(function()
+    while true do
+        local hasJobs = false
+        for k, v in pairs(LockedJobs) do hasJobs = true break end
+
+        if IsSpamming and hasJobs then
+            for jobId, _ in pairs(LockedJobs) do
+                TeleportService:TeleportToPlaceInstance(PLACE_ID, jobId, Player)
+                task.wait() 
+            end
+        else
+            task.wait(0.1)
+        end
+    end
+end)
+
+-- // СОЗДАНИЕ КАРТОЧКИ // --
+local function CreateLogCard(name, value, jobId, orderIndex)
+    local Card = Instance.new("Frame")
+    Card.Size = UDim2.new(1, 0, 0, 50)
+    Card.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+    Card.BorderSizePixel = 0
+    Card.LayoutOrder = orderIndex
+    Card.Parent = LogsScroll
+    local CCorner = Instance.new("UICorner"); CCorner.CornerRadius = UDim.new(0, 6); CCorner.Parent = Card
+    
+    local _, themeColor = GetColorType(value)
+    
+    local Bar = Instance.new("Frame")
+    Bar.Size = UDim2.new(0, 4, 1, 0); Bar.BackgroundColor3 = themeColor; Bar.BorderSizePixel = 0; Bar.Parent = Card
+    local BCor = Instance.new("UICorner"); BCor.CornerRadius = UDim.new(0, 4); BCor.Parent = Bar
+    
+    local NameLbl = Instance.new("TextLabel")
+    NameLbl.Text = name or "Unknown"
+    NameLbl.Font = Enum.Font.GothamBold; NameLbl.TextSize = 14; NameLbl.TextColor3 = Color3.fromRGB(240, 240, 240)
+    NameLbl.BackgroundTransparency = 1; NameLbl.Position = UDim2.new(0, 12, 0, 5); NameLbl.Size = UDim2.new(1, -165, 0, 20)
+    NameLbl.TextXAlignment = Enum.TextXAlignment.Left; NameLbl.ClipsDescendants = true; NameLbl.Parent = Card
+    
+    local formattedValue = "1 in " .. (tostring(value):reverse():gsub("%d%d%d", "%1,"):reverse():gsub("^,", ""))
+    local PriceLbl = Instance.new("TextLabel")
+    PriceLbl.Text = formattedValue
+    PriceLbl.Font = Enum.Font.Gotham; PriceLbl.TextSize = 12; PriceLbl.TextColor3 = themeColor
+    PriceLbl.BackgroundTransparency = 1; PriceLbl.Position = UDim2.new(0, 12, 0, 25); PriceLbl.Size = UDim2.new(0, 200, 0, 15)
+    PriceLbl.TextXAlignment = Enum.TextXAlignment.Left; PriceLbl.Parent = Card
+    
+    local JoinBtn = Instance.new("TextButton")
+    JoinBtn.Text = "JOIN"; JoinBtn.Font = Enum.Font.GothamBold; JoinBtn.TextSize = 11
+    JoinBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 35); JoinBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    JoinBtn.Size = UDim2.new(0, 50, 0, 30); JoinBtn.Position = UDim2.new(1, -60, 0.5, -15); JoinBtn.Parent = Card
+    local JCor = Instance.new("UICorner"); JCor.CornerRadius = UDim.new(0, 6); JCor.Parent = JoinBtn
+    
+    JoinBtn.MouseButton1Click:Connect(function() if jobId then SpamTeleport(jobId) end end) 
+
+    local LockBtn = Instance.new("TextButton")
+    LockBtn.Font = Enum.Font.GothamBold; LockBtn.TextSize = 11
+    LockBtn.Size = UDim2.new(0, 50, 0, 30); LockBtn.Position = UDim2.new(1, -115, 0.5, -15); LockBtn.Parent = Card
+    local LCor = Instance.new("UICorner"); LCor.CornerRadius = UDim.new(0, 6); LCor.Parent = LockBtn
+
+    local function setVisualState(locked)
+        if locked then
+            LockBtn.Text = "STOP"
+            LockBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 50); LockBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        else
+            LockBtn.Text = "LOCK"
+            LockBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45); LockBtn.TextColor3 = Color3.fromRGB(255, 255, 0)
+        end
+    end
+    setVisualState(LockedJobs[jobId] ~= nil)
+
+    LockBtn.MouseButton1Click:Connect(function()
+        if jobId then
+            if LockedJobs[jobId] then LockedJobs[jobId] = nil; setVisualState(false)
+            else LockedJobs[jobId] = true; IsSpamming = true; setVisualState(true) end
+        end
+    end)
+end
+
+-- // ПРЕДЗАГРУЗКА ID // --
+task.spawn(function()
+    local body = safeRequest(API_URL)
+    if body then
+        local s, d = pcall(function() return HttpService:JSONDecode(body) end)
+        if s and d and d.entries and d.entries[1] then LastCheckedID = d.entries[1].jobId end
+    end
+end)
+
+-- // ГЛАВНЫЙ ЦИКЛ // --
+local teleporting = false
+local lastGuiUpdate = 0 
+
+task.spawn(function()
+    while true do
+        task.wait() 
+        
+        local body = safeRequest(API_URL)
+        if body then
+            local success, data = pcall(function() return HttpService:JSONDecode(body) end)
+            
+            if success and data and data.entries and #data.entries > 0 then
+                local newest = data.entries[1]
+                
+                -- === АВТО-ЗАХОД (ПРОВЕРЯЕМ КАЖДЫЙ ПРЕДМЕТ) ===
+                if newest.jobId ~= LastCheckedID and not teleporting then
+                    if Settings.MasterEnabled then
+                        local shouldJoin = false
+                        
+                        -- Проходим по ВСЕМ предметам в списке objects
+                        if newest.objects then
+                            for _, obj in pairs(newest.objects) do
+                                local val = obj.gen or 0
+                                local cType = GetColorType(val)
+                                
+                                local tierMatch = false
+                                -- Если включен Low и предмет Low -> Вход
+                                if cType == "Green" and Settings.AutoGreen then tierMatch = true end
+                                -- Если включен Mid и предмет Mid -> Вход
+                                if cType == "Orange" and Settings.AutoOrange then tierMatch = true end
+                                -- Если включен High и предмет High -> Вход
+                                if cType == "Red" and Settings.AutoRed then tierMatch = true end
+                                
+                                -- Если тир совпал и цена выше минимальной (из текстбокса) -> ЗАХОДИМ
+                                if tierMatch and val >= currentMinFilter then
+                                    shouldJoin = true
+                                    break -- Достаточно найти ОДИН предмет, чтобы начать вход
+                                end
+                            end
+                        end
+
+                        if shouldJoin then
+                            LastCheckedID = newest.jobId
+                            teleporting = true
+                            SpamTeleport(newest.jobId) 
+                            task.wait(2) 
+                            teleporting = false
+                        else
+                            LastCheckedID = newest.jobId
+                        end
+                    else
+                        LastCheckedID = newest.jobId
+                    end
+                end
+                
+                -- === GUI REFRESH (ПОКАЗЫВАЕМ ВСЕ ПРЕДМЕТЫ ПО ОТДЕЛЬНОСТИ) ===
+                if MainFrame.Visible and (tick() - lastGuiUpdate >= GUI_DELAY) then
+                    lastGuiUpdate = tick() 
+                    for _, v in pairs(LogsScroll:GetChildren()) do if v:IsA("Frame") then v:Destroy() end end
+                    
+                    local displayedCount = 0
+                    for _, entry in ipairs(data.entries) do
+                        if entry.objects then
+                            for _, obj in ipairs(entry.objects) do
+                                local val = obj.gen or 0
+                                local cType = GetColorType(val)
+                                local show = false
+                                
+                                if val >= currentMinFilter then
+                                    if cType == "Green" and Settings.AutoGreen then show = true end
+                                    if cType == "Orange" and Settings.AutoOrange then show = true end
+                                    if cType == "Red" and Settings.AutoRed then show = true end
+                                    if not Settings.AutoGreen and not Settings.AutoOrange and not Settings.AutoRed then show = true end
+                                end
+                                
+                                if show then
+                                    displayedCount = displayedCount + 1
+                                    CreateLogCard(obj.name, val, entry.jobId, displayedCount)
+                                end
+                            end
+                        end
+                        if displayedCount >= 30 then break end
+                    end
+                    LogsScroll.CanvasSize = UDim2.new(0, 0, 0, displayedCount * 56)
+                end
+            end
+        end
+    end
+end)
